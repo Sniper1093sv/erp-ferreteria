@@ -1,13 +1,5 @@
 from . import db
 
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(120), unique=True, nullable=False)
-    password = db.Column(db.String(200), nullable=False)  # Hashed password
-
-    def __repr__(self):
-        return f'<User {self.username}>'
 
 class Seller(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -65,5 +57,28 @@ class OrderDetail(db.Model):
 
     def __repr__(self):
         return f'<OrderDetail {self.id}>'
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default='vendedor')  # admin, vendedor
+
+    def __repr__(self):
+        return f'<User {self.username}>'
+
+class Log(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    action = db.Column(db.String(50), nullable=False)
+    target_type = db.Column(db.String(50), nullable=False)
+    target_id = db.Column(db.Integer, nullable=True)
+    timestamp = db.Column(db.DateTime, nullable=False, default=db.func.now())
+
+    user = db.relationship('User', backref=db.backref('logs', lazy=True))
+
+    def __repr__(self):
+        return f'<Log {self.action} {self.target_type} {self.target_id}>'
 
 

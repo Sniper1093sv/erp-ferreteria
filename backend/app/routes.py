@@ -7,6 +7,8 @@ import pandas as pd
 import io
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from functools import wraps
+from .models import Log
 
 main = Blueprint('main', __name__)
 
@@ -22,6 +24,7 @@ def register():
     username = data.get('username')
     email = data.get('email')
     password = data.get('password')
+    role = data.get('role', 'vendedor')  # Si no se especifica, es vendedor
 
     if not username or not email or not password:
         return jsonify({'message': 'Faltan datos'}), 400
@@ -31,11 +34,11 @@ def register():
         return jsonify({'message': 'Usuario o email ya existe'}), 400
 
     hashed_password = generate_password_hash(password)
-    new_user = User(username=username, email=email, password=hashed_password)
+    new_user = User(username=username, email=email, password=hashed_password, role=role)
     db.session.add(new_user)
     db.session.commit()
 
-    return jsonify({'message': 'Usuario registrado exitosamente'})
+    return jsonify({'message': f'Usuario registrado exitosamente con rol {role}'})
 
 @main.route('/login', methods=['POST'])
 def login():
@@ -60,6 +63,19 @@ def dashboard():
     current_user_id = get_jwt_identity()
     return jsonify({"message": f"Bienvenido al dashboard, usuario {current_user_id}"})
 
+# ========== DECORADOR DE ROL ==========
+def role_required(role):
+    def decorator(fn):
+        @wraps(fn)
+        @jwt_required()
+        def wrapper(*args, **kwargs):
+            current_user_id = get_jwt_identity()
+            user = User.query.get(current_user_id)
+            if not user or user.role != role:
+                return jsonify({'message': 'Acceso denegado: Permiso insuficiente'}), 403
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
 
 # ======= VENDEDORES =======
 @main.route('/sellers', methods=['POST'])
@@ -109,15 +125,6 @@ def update_seller(seller_id):
     seller.email = data.get('email', seller.email)
     db.session.commit()
     return jsonify({'message': 'Vendedor actualizado correctamente'})
-
-@main.route('/sellers/<int:seller_id>', methods=['DELETE'])
-@jwt_required()
-def delete_seller(seller_id):
-    seller = Seller.query.get_or_404(seller_id)
-    db.session.delete(seller)
-    db.session.commit()
-    return jsonify({'message': 'Vendedor eliminado correctamente'})
-
 
 # ======= CLIENTES =======
 @main.route('/clients', methods=['POST'])
@@ -176,6 +183,28 @@ def delete_client(client_id):
     db.session.commit()
     return jsonify({'message': 'Cliente eliminado correctamente'})
 
+@main.route('/clients/search', methods=['GET'])
+@jwt_required()
+def search_clients():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'message': 'Debe enviar el parámetro ?q=valor'}), 400
+
+    results = Client.query.filter(
+        (Client.name.ilike(f'%{query}%')) |
+        (Client.email.ilike(f'%{query}%')) |
+        (Client.address.ilike(f'%{query}%'))
+    ).all()
+
+    data = [{
+        'id': c.id,
+        'name': c.name,
+        'email': c.email,
+        'phone': c.phone,
+        'address': c.address
+    } for c in results]
+
+    return jsonify(data)
 
 # ======= PRODUCTOS =======
 @main.route('/products', methods=['POST'])
@@ -240,7 +269,6 @@ def delete_product(product_id):
     db.session.commit()
     return jsonify({'message': 'Producto eliminado correctamente'})
 
-
 # ======= ÓRDENES =======
 @main.route('/orders', methods=['POST'])
 @jwt_required()
@@ -296,7 +324,6 @@ def delete_order(order_id):
     return jsonify({'message': 'Orden eliminada correctamente'})
 
 
-# ======= DETALLES DE ORDEN =======
 @main.route('/orders/<int:order_id>/add_product', methods=['POST'])
 @jwt_required()
 def add_product_to_order(order_id):
@@ -328,7 +355,6 @@ def list_order_details(order_id):
         } for d in details
     ]
     return jsonify(details_data)
-
 
 # ======= ESTADÍSTICAS =======
 @main.route('/stats', methods=['GET'])
@@ -554,3 +580,84 @@ def export_orders_pdf():
         download_name='ordenes.pdf',
         mimetype='application/pdf'
     )
+
+
+@main.route('/products/search', methods=['GET'])
+@jwt_required()
+def search_products():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify({'message': 'Debe enviar el parámetro ?q=valor'}), 400
+
+    results = Product.query.filter(
+        (Product.name.ilike(f'%{query}%')) |
+        (Product.description.ilike(f'%{query}%')) |
+        (Product.category.ilike(f'%{query}%'))
+    ).all()
+
+    data = [{
+        'id': p.id,
+        'name': p.name,
+        'description': p.description,
+        'price': p.price,
+        'stock': p.stock,
+        'category': p.category
+    } for p in results]
+
+    return jsonify(data)
+
+@main.route('/orders/search', methods=['GET'])
+@jwt_required()
+def search_orders():
+    client_id = request.args.get('client_id')
+    seller_id = request.args.get('seller_id')
+    date = request.args.get('date')  # formato 'YYYY-MM-DD'
+
+    query = Order.query
+    if client_id:
+        query = query.filter(Order.client_id == client_id)
+    if seller_id:
+        query = query.filter(Order.seller_id == seller_id)
+    if date:
+        query = query.filter(Order.date == date)
+
+    results = query.all()
+    data = [{
+        'id': o.id,
+        'client_id': o.client_id,
+        'seller_id': o.seller_id,
+        'date': o.date,
+        'total': o.total
+    } for o in results]
+
+    return jsonify(data)
+
+def registrar_log(user_id, action, target_type, target_id):
+    nuevo_log = Log(
+        user_id=user_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id
+    )
+    db.session.add(nuevo_log)
+    db.session.commit()
+
+@main.route('/change_password', methods=['POST'])
+@jwt_required()
+def change_password():
+    data = request.get_json()
+    new_password = data.get('new_password')
+    if not new_password:
+        return jsonify({'message': 'Debe ingresar la nueva contraseña'}), 400
+
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    if not user:
+        return jsonify({'message': 'Usuario no encontrado'}), 404
+
+    user.password = generate_password_hash(new_password)
+    db.session.commit()
+
+    return jsonify({'message': 'Contraseña actualizada correctamente'})
+
+    
